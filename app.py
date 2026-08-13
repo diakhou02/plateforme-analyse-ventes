@@ -209,8 +209,12 @@ elif st.session_state.etape == 2:
         st.caption("Nos recommandations sont pré-sélectionnées. "
                    "Vous pouvez les modifier.")
 
-        for issue in decisions:
+        for n_issue, issue in enumerate(decisions):
+            # La clé doit être unique : une même anomalie peut toucher
+            # plusieurs colonnes (C04 sur « Discount » ET « Region »), et
+            # deux widgets de même clé font planter Streamlit.
             iid = issue["id"]
+            cle = f"{iid}_{n_issue}_{'_'.join(issue.get('columns') or [])}"
             with st.container(border=True):
                 st.markdown(f"**{issue['user_message']}**")
                 st.write(issue["user_explanation"])
@@ -222,7 +226,7 @@ elif st.session_state.etape == 2:
                 defaut = next((i for i, o in enumerate(options)
                                if o.get("is_default")), 0)
                 choix = st.radio("Que faire ?", labels, index=defaut,
-                                 key=f"radio_{iid}", horizontal=True,
+                                 key=f"radio_{cle}", horizontal=True,
                                  label_visibility="collapsed")
                 action = options[labels.index(choix)]["action"]
                 st.session_state.decisions[iid] = action

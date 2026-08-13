@@ -166,6 +166,16 @@ CONCEPTS = {
         ],
         "penalize": ["ligne", "line", "article", "unitaire", "frais", "port"],
     },
+    "discount": {
+        "label": "Remise",
+        "required": False,
+        "structural_roles": {"measure", "categorical"},
+        "synonyms": [
+            "remise", "discount", "reduction", "rabais", "promo", "promotion",
+            "taux remise", "discount rate", "discount pct", "descuento",
+            "rabatt", "desconto",
+        ],
+    },
     "shipping_cost": {
         "label": "Frais de livraison",
         "required": False,

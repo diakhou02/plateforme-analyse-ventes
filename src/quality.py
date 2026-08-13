@@ -535,15 +535,48 @@ def detect_categories(df: pd.DataFrame, profile: dict) -> list[Issue]:
             ))
 
         # C04 — fautes de frappe (distance d'édition faible)
+        #
+        # Restreint aux LIBELLÉS. Sur un fichier réel, la règle signalait
+        # « 10 » et « 20 » (deux taux de remise) et « South » et « North »
+        # (deux régions) comme fautes de frappe : deux caractères d'écart,
+        # mais aucun rapport. Une distance d'édition faible n'a de sens que
+        # sur des mots suffisamment longs pour que la coïncidence soit
+        # improbable.
         uniq = t.value_counts()
-        if 2 <= len(uniq) <= 200:
+        numerique = t.str.replace(r"[\s.,%-]", "", regex=True).str.isdigit().mean() > 0.5
+        libelles = t.str.len().median() >= 6 if len(t) else False
+
+        if 2 <= len(uniq) <= 200 and not numerique and libelles:
             names = list(uniq.index)
             pairs, deja = [], set()
             for i, a in enumerate(names):
                 for b in names[i + 1:]:
                     if a.lower() == b.lower() or b in deja:
                         continue
-                    if abs(len(a) - len(b)) <= 2 and _levenshtein(a.lower(), b.lower()) <= 2:
+                    # Distance tolérée proportionnelle : 1 caractère pour un
+                    # mot court, 2 au-delà de 8 caractères. « South »/« North »
+                    # (5 lettres, distance 2) cesse ainsi d'être un faux positif.
+                    seuil = 1 if min(len(a), len(b)) < 8 else 2
+                    # Deux libellés qui diffèrent par un MOT ENTIER ne sont pas
+                    # des fautes de frappe : « Men's Wear » et « Women's Wear »
+                    # ont deux caractères d'écart mais désignent deux rayons.
+                    # Une faute de frappe altère un mot, elle n'en change pas.
+                    mots_a = _strip_accents(a).lower().split()
+                    mots_b = _strip_accents(b).lower().split()
+                    meme_structure = True
+                    if len(mots_a) > 1 or len(mots_b) > 1:
+                        if len(mots_a) != len(mots_b):
+                            meme_structure = False
+                        else:
+                            # Les mots qui diffèrent doivent différer d'UN SEUL
+                            # caractère. « women's » et « men's » ont deux
+                            # caractères d'écart : ce sont deux mots, pas une
+                            # coquille — donc deux rayons distincts.
+                            diffs = [(x, y) for x, y in zip(mots_a, mots_b) if x != y]
+                            meme_structure = all(
+                                _levenshtein(x, y) <= 1 for x, y in diffs)
+                    if (abs(len(a) - len(b)) <= 2 and meme_structure
+                            and _levenshtein(a.lower(), b.lower()) <= seuil):
                         # La forme la plus fréquente est retenue comme correcte.
                         # On ne conditionne PAS à un écart de fréquence : deux
                         # orthographes peuvent coexister à parts égales dans un
@@ -907,6 +940,28 @@ def detect_coherence(df: pd.DataFrame, profile: dict,
 
     if qte is not None and pu is not None and rev is not None:
         attendu = qte * pu
+
+        # La REMISE doit entrer dans le calcul. Sans elle, un fichier
+        # parfaitement cohérent voyait 80 % de ses lignes signalées à tort :
+        # « Sales = Quantité × Prix × (1 − remise) » est la formule courante
+        # dès qu'une colonne de rabais existe.
+        c_disc, disc = num("discount")
+        formule = "quantité × prix"
+        if disc is not None:
+            # La remise s'exprime soit en pourcentage (0-100), soit en taux (0-1)
+            en_pct = float(disc.dropna().max() or 0) > 1.5
+            taux = (disc / 100.0) if en_pct else disc
+            avec_remise = attendu * (1 - taux.fillna(0))
+            # On retient la formule qui explique le mieux les données
+            def part_ok(att):
+                v = att.notna() & rev.notna() & (att != 0)
+                if not v.any():
+                    return 0.0
+                return float((((rev - att).abs() / att.abs())[v] <= 0.02).mean())
+            if part_ok(avec_remise) > part_ok(attendu):
+                attendu = avec_remise
+                formule = "quantité × prix × (1 − remise)"
+
         valides = attendu.notna() & rev.notna() & (attendu != 0)
         ecart = (rev - attendu).abs() / attendu.abs().where(attendu != 0)
         mask = valides & (ecart > 0.02)          # 2 % de tolérance : arrondis
@@ -919,10 +974,10 @@ def detect_coherence(df: pd.DataFrame, profile: dict,
                 sample_rows=[int(i) for i in exemples],
                 user_message=f"{k} ligne(s) ont un montant qui ne correspond pas "
                              f"à la quantité multipliée par le prix.",
-                user_explanation="Par exemple, une commande de 3 articles à 10 € "
-                                 "devrait afficher 30 €. Cet écart vient souvent "
-                                 "d'une remise non enregistrée, de frais ajoutés, "
-                                 "ou d'une erreur de saisie.",
+                user_explanation=f"Le montant devrait correspondre à "
+                                 f"{formule}. Cet écart vient souvent de frais "
+                                 f"ajoutés, d'une remise non enregistrée, ou "
+                                 f"d'une erreur de saisie.",
                 impact_if_ignored="Impossible de savoir quel chiffre est juste : "
                                   "votre chiffre d'affaires pourrait être faux.",
                 recommendation="preview",
@@ -930,7 +985,8 @@ def detect_coherence(df: pd.DataFrame, profile: dict,
                 options=_opts(("preview", "Voir les lignes"),
                               ("recompute", "Recalculer le montant"),
                               ("keep", "Garder tel quel")),
-                details={"ecart_median_pct": round(float(ecart[mask].median() * 100), 1)},
+                details={"ecart_median_pct": round(float(ecart[mask].median() * 100), 1),
+                         "formule_retenue": formule},
             ))
 
     # --- R02 : livraison postérieure à la commande -----------------------
