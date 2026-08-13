@@ -65,6 +65,21 @@ SI le JSON contient "last_period_incomplete": true, précise dans le constat que
 la dernière période affichée est partielle et ne doit pas être comparée aux
 autres.
 
+RÈGLE IMPÉRATIVE SUR LES TENDANCES — lis "trend_direction" avant d'écrire :
+
+- "stable" : tu n'as PAS le droit d'annoncer une hausse ni une baisse, même si
+  "change_pct" est important. Ce chiffre compare deux périodes isolées d'une
+  série qui n'a aucune direction nette. Dis que l'activité est STABLE, et
+  utilise "volatilite_pct" pour indiquer l'amplitude normale des variations
+  d'une période à l'autre. N'utilise PAS "change_pct" dans ta phrase.
+- "baisse" ou "hausse" : la tendance est établie, tu peux l'annoncer et citer
+  "change_pct".
+
+De même, ne désigne un « meilleur » jour, produit ou catégorie que si son écart
+au reste est net. Quand les valeurs sont proches, dis qu'elles sont équilibrées
+plutôt que de sacrer un gagnant : nommer un vainqueur là où il n'y en a pas
+conduit le commerçant à des décisions fondées sur du hasard.
+
 SI un CONTEXTE DU COMMERCE t'est fourni, utilise-le pour SITUER les chiffres :
 un pic attendu dans ce secteur se commente autrement qu'un pic inexpliqué, et
 une action pertinente ailleurs peut ne pas l'être ici. Ce contexte ne contient
@@ -146,6 +161,7 @@ def facts_for_llm(facts: dict, max_points: int = 30) -> dict:
         "axe": facts.get("dimension_labels", [None])[0],
         "points": pts,
         "statistiques": facts["computed_stats"],
+        "lecture_tendance": facts["computed_stats"].get("trend_comment"),
         "problemes_detectes": [
             {"nom": p["pattern_id"], "preuve": p["evidence"],
              "causes_possibles": p["causes"], "actions": p["actions"]}

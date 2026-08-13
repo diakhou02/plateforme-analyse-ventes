@@ -125,6 +125,11 @@ def execute_spec(spec: dict, df: pd.DataFrame) -> dict | None:
     if data.empty:
         return None
 
+    # Effectif par groupe : indispensable pour repérer une période partielle
+    # sur une MOYENNE. Une moyenne ne s'effondre pas quand le mois est
+    # incomplet — seul le nombre de lignes le révèle.
+    effectifs = data.groupby(cles, dropna=True, observed=True)[col_m].size()
+
     grouped = data.groupby(cles, dropna=True, observed=True)[col_m]
     fonctions = {
         "sum": "sum", "mean": "mean", "median": "median", "count": "count",
@@ -156,8 +161,17 @@ def execute_spec(spec: dict, df: pd.DataFrame) -> dict | None:
         else:
             res = res.tail(limite)
 
+    # Effectifs alignés sur les groupes retenus
+    res = res.reset_index(drop=True)
+    try:
+        cle_eff = effectifs.reset_index()
+        cle_eff.columns = [f"dim{i}" for i in range(len(cles))] + ["n_lignes"]
+        res = res.merge(cle_eff, on=[f"dim{i}" for i in range(len(cles))], how="left")
+    except Exception:
+        res["n_lignes"] = np.nan
+
     return {
-        "table": res.reset_index(drop=True),
+        "table": res,
         "n_groupes_total": n_avant,
         "n_groupes_affiches": len(res),
         "total": total_avant,
@@ -194,9 +208,22 @@ def compute_stats(res: dict) -> dict:
         v_calc, exclue = v, None
         if len(v) >= 4:
             reste = v.iloc[:-1]
-            if v.iloc[-1] < reste.median() * 0.5:
+            t = res["table"]
+
+            # Deux indices d'une période partielle :
+            #  - la VALEUR s'effondre (vrai pour une somme)
+            #  - l'EFFECTIF s'effondre (seul indice pour une moyenne)
+            partielle = v.iloc[-1] < reste.median() * 0.5
+            if "n_lignes" in t.columns and t["n_lignes"].notna().all():
+                eff = t["n_lignes"].astype(float)
+                if eff.iloc[-1] < eff.iloc[:-1].median() * 0.5:
+                    partielle = True
+                    st["last_period_n_lignes"] = int(eff.iloc[-1])
+                    st["periode_habituelle_n_lignes"] = int(eff.iloc[:-1].median())
+
+            if partielle:
                 v_calc = reste
-                exclue = str(res["table"]["dim0"].iloc[-1])
+                exclue = str(t["dim0"].iloc[-1])
                 st["last_period_incomplete"] = True
                 st["last_period_excluded"] = exclue
                 st["last_period_value"] = round(float(v.iloc[-1]), 2)
@@ -216,7 +243,33 @@ def compute_stats(res: dict) -> dict:
             pred = pente * x + ordonnee
             ss_res = float(((v_calc.values - pred) ** 2).sum())
             ss_tot = float(((v_calc.values - v_calc.mean()) ** 2).sum())
-            st["trend_r2"] = round(1 - ss_res / ss_tot, 3) if ss_tot else 0.0
+            r2 = round(1 - ss_res / ss_tot, 3) if ss_tot else 0.0
+            st["trend_r2"] = r2
+
+            # QUALIFICATION DE LA TENDANCE.
+            #
+            # Comparer le premier et le dernier point d'une série est très
+            # sensible au bruit : sur un fichier réel, cela donnait « −14,9 % »
+            # alors que la pente était POSITIVE et le r² de 0,005. Le chiffre
+            # était exact, sa lecture était fausse.
+            #
+            # `trend_direction` dit ce qu'on a le droit d'affirmer, et
+            # `volatilite_pct` donne l'amplitude normale des variations.
+            moy = float(v_calc.mean()) or 1.0
+            volatilite = float(v_calc.std()) / abs(moy) * 100
+            st["volatilite_pct"] = round(volatilite, 1)
+
+            pente_relative = abs(pente) / abs(moy) * 100
+            if r2 < 0.25 or pente_relative < 1.0:
+                st["trend_direction"] = "stable"
+                st["trend_comment"] = (
+                    f"Aucune tendance nette : les variations d'une période à "
+                    f"l'autre ({volatilite:.1f} %) sont du même ordre que "
+                    f"l'écart entre le début et la fin.")
+            elif pente > 0:
+                st["trend_direction"] = "hausse"
+            else:
+                st["trend_direction"] = "baisse"
 
     if not res["temporel"] and len(v) >= 3:
         tri = v.sort_values(ascending=False)
@@ -249,8 +302,11 @@ def detect_patterns(res: dict, stats: dict, spec: dict, contexte: dict) -> list[
         pente, r2 = stats["trend_slope"], stats.get("trend_r2", 0)
         variation = stats.get("change_pct", 0)
         moyenne = stats["mean"] or 1
+        direction = stats.get("trend_direction", "stable")
 
-        if pente < 0 and r2 > 0.25 and abs(pente) > moyenne * 0.02:
+        # Une série qualifiée « stable » ne déclenche AUCUN pattern de tendance,
+        # même si l'écart entre premier et dernier point paraît important.
+        if direction == "baisse" and r2 > 0.25 and abs(pente) > moyenne * 0.02:
             out.append({
                 "pattern_id": "trend_decline", "confidence": round(min(0.95, r2 + 0.3), 2),
                 "evidence": {"variation_pct": variation, "pente": pente, "r2": r2},
@@ -260,7 +316,7 @@ def detect_patterns(res: dict, stats: dict, spec: dict, contexte: dict) -> list[
                             "Vérifier vos stocks sur la période concernée",
                             "Relancer les clients qui n'ont pas commandé depuis 3 mois"],
             })
-        elif pente > 0 and r2 > 0.25 and pente > moyenne * 0.02:
+        elif direction == "hausse" and r2 > 0.25 and pente > moyenne * 0.02:
             out.append({
                 "pattern_id": "trend_growth", "confidence": round(min(0.95, r2 + 0.3), 2),
                 "evidence": {"variation_pct": variation, "pente": pente, "r2": r2},
@@ -376,7 +432,8 @@ def detect_patterns(res: dict, stats: dict, spec: dict, contexte: dict) -> list[
 
     # --- PANIER MOYEN ---
     if (spec["measure"]["agg"] == "mean" and role == "revenue"
-            and res["temporel"] and stats.get("change_pct", 0) < -10):
+            and res["temporel"] and stats.get("change_pct", 0) < -10
+            and stats.get("trend_direction") == "baisse"):
         out.append({
             "pattern_id": "basket_erosion", "confidence": 0.8,
             "evidence": {"variation_pct": stats["change_pct"],
