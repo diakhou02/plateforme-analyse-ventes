@@ -112,6 +112,12 @@ INTERDICTIONS ABSOLUES
 - N'invente aucun chiffre : n'utilise que ceux présents dans le JSON fourni.
 - Aucun jargon technique.
 - Ne recommande que des actions issues des analyses fournies.
+- Si une analyse porte "tendance": "stable", tu ne dois annoncer NI hausse NI
+  baisse pour elle. Dis que l'activité se maintient, et sers-toi de
+  "variation_normale_pct" pour donner l'amplitude habituelle des variations.
+- Ne désigne un « meilleur » jour, produit ou catégorie que si l'écart au reste
+  est net. Quand les valeurs sont proches, dis qu'elles sont équilibrées : un
+  vainqueur désigné au hasard conduit à des décisions fondées sur du bruit.
 
 STRUCTURE
 1. "situation" — 3 à 4 phrases. Où en est ce commerce aujourd'hui ? Relie les
@@ -243,9 +249,25 @@ def build_synthesis(facts_list: list, model: str, api_key: str,
             "analyse": f["title"],
             "problemes": [p["pattern_id"] for p in f.get("detected_patterns", [])],
         }
-        for cle in ("change_pct", "top20_share_pct", "top1_share_pct", "total"):
+        # La QUALIFICATION prime sur la variation brute. Sans elle, la
+        # synthèse annonçait « baisse de 14,9 % » sur une série dont la pente
+        # est positive et le r² de 0,005 : le chiffre est exact, sa lecture
+        # est fausse. C'est le même défaut que sur les analyses individuelles,
+        # corrigé là mais oublié ici.
+        direction = st.get("trend_direction")
+        if direction:
+            entree["tendance"] = direction
+            if direction == "stable":
+                entree["remarque"] = ("série stable, ne pas annoncer de hausse "
+                                      "ni de baisse")
+                entree["variation_normale_pct"] = st.get("volatilite_pct")
+            else:
+                entree["change_pct"] = st.get("change_pct")
+        for cle in ("top20_share_pct", "top1_share_pct", "total"):
             if cle in st:
                 entree[cle] = st[cle]
+        if not direction and "change_pct" in st:
+            entree["change_pct"] = st["change_pct"]
         if st.get("max"):
             entree["plus_fort"] = st["max"]
         resume.append(entree)
