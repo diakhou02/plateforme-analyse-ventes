@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import traceback
 import os
 import sys
 from pathlib import Path
@@ -71,7 +72,7 @@ def init():
         "etape": 1, "df_raw": None, "rapport_lecture": None, "profil": None,
         "map_res": None, "mapping": None, "rapport": None, "cleaner": None,
         "df_clean": None, "facts": None, "interpretations": None,
-        "synthese": None, "decisions": {},
+        "synthese": None, "decisions": {}, "secteur": None,
     }.items():
         st.session_state.setdefault(cle, val)
 
@@ -160,11 +161,24 @@ if st.session_state.etape == 1:
                 st.button("Continuer  →", type="primary",
                           on_click=aller, args=(2,))
 
-        except ValueError:
-            st.error("Ce fichier n'a pas pu être lu. Essayez de le réenregistrer "
-                     "au format CSV depuis votre tableur.")
+        except ValueError as e:
+            # B04 est le SEUL cas où le fichier est réellement illisible.
+            # Attraper toute ValueError sous ce message masquait les erreurs
+            # survenues plus loin dans le pipeline — profilage, mapping,
+            # diagnostic — et rendait tout diagnostic impossible.
+            if "B04" in str(e):
+                st.error("Ce fichier n'a pas pu être lu. Essayez de le "
+                         "réenregistrer au format CSV depuis votre tableur.")
+            else:
+                st.error("Une erreur est survenue pendant l'analyse de votre fichier.")
+                with st.expander("Détail technique"):
+                    st.code(f"{type(e).__name__}: {e}")
+                    st.code(traceback.format_exc())
         except Exception as e:
-            st.error(f"Erreur à la lecture : {e}")
+            st.error("Une erreur est survenue pendant l'analyse de votre fichier.")
+            with st.expander("Détail technique"):
+                st.code(f"{type(e).__name__}: {e}")
+                st.code(traceback.format_exc())
 
 
 # ==========================================================================
