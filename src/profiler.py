@@ -46,6 +46,10 @@ NULL_TOKENS = {"", "na", "n/a", "nan", "none", "null", "-", "--", "?", "#n/a",
 BOOL_TOKENS = {"oui", "non", "yes", "no", "true", "false", "vrai", "faux",
                "1", "0", "y", "n", "o"}
 
+# Tous les espaces, y compris insécable (U+00A0) et fin insécable (U+202F),
+# écrits littéralement pour rester compatibles avec le moteur RE2 d'Arrow.
+ESPACES = "[" + " \t\r\n" + "  " + "]"
+
 CURRENCY = re.compile(r"[€$£¥]|R\$|EUR|USD|XOF|FCFA|CFA", re.IGNORECASE)
 NUM_LIKE = re.compile(r"^-?\d{1,3}(?:[ \u00a0.,]\d{3})*(?:[.,]\d+)?$|^-?\d+(?:[.,]\d+)?$")
 
@@ -91,7 +95,9 @@ def comma_role(s: pd.Series) -> tuple[str, float]:
     Retourne (rôle, confiance).
     """
     t = s.astype(str).str.strip().str.replace(CURRENCY, "", regex=True)
-    t = t.str.replace(r"[\s\u00a0]", "", regex=True)
+    # Espaces insécables en clair : le moteur regex d'Arrow (pandas 3.0)
+    # rejette les échappements \u, contrairement au module `re` de Python.
+    t = t.str.replace(ESPACES, "", regex=True)
     n = len(t)
     if n == 0:
         return "decimal", 0.0
@@ -119,7 +125,9 @@ def clean_numeric_strings(s: pd.Series) -> pd.Series:
     """Retire symboles monétaires et séparateurs de milliers, gère la virgule décimale."""
     t = s.astype(str).str.strip()
     t = t.str.replace(CURRENCY, "", regex=True)
-    t = t.str.replace(r"[\s\u00a0]", "", regex=True)
+    # Espaces insécables en clair : le moteur regex d'Arrow (pandas 3.0)
+    # rejette les échappements \u, contrairement au module `re` de Python.
+    t = t.str.replace(ESPACES, "", regex=True)
 
     role, _ = comma_role(s)
 
