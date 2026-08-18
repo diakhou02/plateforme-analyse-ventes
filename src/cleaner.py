@@ -564,12 +564,31 @@ def controle_vraisemblance(cleaner, mapping: dict | None = None) -> dict:
             return None
         return int(df[col].nunique())
 
+    # Format de date établi par le profileur : on le RÉUTILISE au lieu de
+    # relancer une inférence. Comparer une colonne texte reparsée à une colonne
+    # déjà typée revenait à comparer deux lectures différentes des mêmes
+    # dates — d'où une « réduction de 31,3 % de la période » alors qu'aucune
+    # ligne n'avait été retirée.
+    fmt_date = None
+    for c in (cleaner.report.get("_profile_columns") or []):
+        if c.get("role_candidate") == "temporal" and c.get("date_format"):
+            if c["date_format"] not in ("mixte", "natif"):
+                fmt_date = c["date_format"]
+            break
+
     def amplitude(df, col):
         if not col or col not in df.columns:
             return None
-        d = pd.to_datetime(df[col], errors="coerce", format="mixed", dayfirst=True)
-        d = d.dropna()
-        return int((d.max() - d.min()).days) if len(d) > 1 else None
+        s = df[col]
+        if pd.api.types.is_datetime64_any_dtype(s):
+            d = s.dropna()
+        elif fmt_date:
+            d = pd.to_datetime(s, format=fmt_date, errors="coerce").dropna()
+        else:
+            d = pd.to_datetime(s, errors="coerce", dayfirst=True).dropna()
+        if len(d) < 2:
+            return None
+        return int((d.max() - d.min()).days)
 
     ecarts, alertes = {}, []
 
