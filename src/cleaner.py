@@ -436,10 +436,26 @@ class Cleaner:
             return df
 
         dayfirst = self.decisions.get("T02_ambiguous_format", "dayfirst") == "dayfirst"
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce",
-                                      format="mixed", dayfirst=dayfirst)
-        self._log("T02_ambiguous_format", "parse_dates", cols=[date_col],
-                  params={"dayfirst": dayfirst})
+
+        # Le PROFILEUR a déjà déterminé le format en testant chaque motif
+        # sur toute la colonne. Le redeviner ici, c'est risquer d'aboutir à
+        # une autre conclusion — et une date mal lue décale toute la série
+        # temporelle sans qu'aucune erreur ne soit levée.
+        fmt = None
+        for c in self.report.get("_profile_columns", []):
+            if c.get("name") == date_col and c.get("date_format"):
+                fmt = c["date_format"]
+                break
+
+        if fmt and fmt not in ("mixte", "natif"):
+            df[date_col] = pd.to_datetime(df[date_col], format=fmt, errors="coerce")
+            self._log("T02_ambiguous_format", "parse_dates", cols=[date_col],
+                      params={"format": fmt, "source": "profileur"})
+        else:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce",
+                                          format="mixed", dayfirst=dayfirst)
+            self._log("T02_ambiguous_format", "parse_dates", cols=[date_col],
+                      params={"dayfirst": dayfirst})
 
         # T04 — dates absurdes : passage à vide, jamais d'invention de valeur
         mask = (df[date_col].dt.year < 1990) | (df[date_col].dt.year == 1900)

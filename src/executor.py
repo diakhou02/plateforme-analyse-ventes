@@ -72,9 +72,23 @@ def _apply_filters(df: pd.DataFrame, filters: list) -> tuple[pd.DataFrame, list]
     return df, appliques
 
 
-def _temporal_key(s: pd.Series, grain: str) -> pd.Series:
-    """Convertit une date en clé d'agrégation lisible."""
-    d = pd.to_datetime(s, errors="coerce")
+def _temporal_key(s: pd.Series, grain: str, dayfirst: bool = True) -> pd.Series:
+    """
+    Convertit une date en clé d'agrégation lisible.
+
+    `dayfirst=True` est INDISPENSABLE. Sans lui, pandas applique la convention
+    américaine : « 04/10/2023 » devient le 10 avril au lieu du 4 octobre. Sur
+    un fichier réel, cela étalait 25 mois de ventes sur 36 mois — avec des mois
+    de bord presque vides — et produisait une « hausse de 983,5 % » entièrement
+    fabriquée.
+
+    Le profileur avait pourtant identifié le bon format. Le défaut venait de ce
+    reparsing en aval, qui ignorait ce qui avait déjà été établi.
+    """
+    if pd.api.types.is_datetime64_any_dtype(s):
+        d = s
+    else:
+        d = pd.to_datetime(s, errors="coerce", format="mixed", dayfirst=dayfirst)
     if grain == "day":
         return d.dt.strftime("%Y-%m-%d")
     if grain == "week":
