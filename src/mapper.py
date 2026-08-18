@@ -246,7 +246,10 @@ def _name_score(col_name: str, concept: dict) -> float:
     for syn in concept["synonyms"]:
         s = syn.replace("_", " ")
         if norm == s:
-            return 1.0
+            # Nom EXACT : « Status » désigne le statut principal, tandis que
+            # « Courier Status » ou « Payment Status » désignent des sous-statuts
+            # partiels. Le qualificatif restreint la portée de la colonne.
+            return 1.15
         s_tokens = set(s.split())
         if s_tokens and s_tokens <= tokens:          # tous les mots présents
             best = max(best, 0.9)
@@ -280,9 +283,14 @@ def _content_score(col_profile: dict, series: pd.Series | None, concept_key: str
     ratio = col_profile.get("cardinality_ratio", 0)
 
     if concept_key == "order_status":
-        tops = {str(v["value"]).strip().lower() for v in col_profile.get("top_values", [])}
+        # Comparaison par SOUS-CHAÎNE : les plateformes utilisent des statuts
+        # composés (« Shipped - Delivered to Buyer », « Pending - Waiting for
+        # Pick Up »). Une égalité stricte ne les reconnaissait pas, et
+        # favorisait une colonne secondaire aux valeurs plus simples.
+        tops = [str(v["value"]).strip().lower() for v in col_profile.get("top_values", [])]
         if tops:
-            hit = len(tops & STATUS_VALUES) / len(tops)
+            hit = sum(1 for t in tops
+                      if any(sv in t for sv in STATUS_VALUES)) / len(tops)
             adj += 0.4 * hit if hit else -0.1
 
     elif concept_key == "customer_id":

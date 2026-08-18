@@ -36,9 +36,16 @@ TOTAL_TOKENS = {"total", "totaux", "somme", "sous-total", "sous total",
 TEST_TOKENS = {"test", "essai", "demo", "dummy", "aaa", "xxx", "zzz",
                "azerty", "qwerty", "toto", "sample", "exemple"}
 
+# Statuts qui ne correspondent à AUCUN revenu encaissé. La liste couvre les
+# libellés composés des marketplaces (« Shipped - Rejected by Buyer »,
+# « Shipped - Lost in Transit ») : une commande expédiée puis perdue ou
+# refusée n'a pas plus généré de chiffre d'affaires qu'une commande annulée.
 CANCELLED = {"annule", "annulee", "cancelled", "canceled", "refunded",
              "rembourse", "remboursee", "unavailable", "failed", "echec",
-             "returned", "retourne", "void"}
+             "returned", "returning", "retourne", "retournee", "void",
+             "rejected", "rejete", "rejetee", "refuse", "refusee",
+             "lost in transit", "perdu", "non livre", "undelivered",
+             "chargeback", "litige", "dispute"}
 
 NULL_TOKENS = {"", "na", "n/a", "nan", "none", "null", "-", "--", "?", "#n/a",
                "#na", "inconnu", "non renseigne", "vide", "nil", "undefined"}
@@ -710,7 +717,15 @@ def detect_special_rows(df: pd.DataFrame, profile: dict, mapping: dict | None) -
                     break
     if status_col and status_col in df.columns:
         s = df[status_col].astype(str).str.strip().str.lower().map(_strip_accents)
-        mask = s.isin({_strip_accents(x) for x in CANCELLED})
+        # Correspondance par SOUS-CHAÎNE : « Shipped - Returned to Seller » ou
+        # « Shipped - Rejected by Buyer » sont des non-ventes, mais une égalité
+        # stricte ne les repérait pas. Sur un export Amazon réel, cela faisait
+        # passer 14,2 % de commandes annulées pour 4,6 %.
+        motifs = {_strip_accents(x) for x in CANCELLED}
+        mask = s.isin(motifs)
+        for m in motifs:
+            if len(m) >= 6:
+                mask |= s.str.contains(rf"\b{m}", regex=True, na=False)
         if mask.any():
             k = int(mask.sum())
             out.append(Issue(
