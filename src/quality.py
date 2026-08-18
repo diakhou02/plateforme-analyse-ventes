@@ -51,6 +51,16 @@ NULL_TOKENS = {"", "na", "n/a", "nan", "none", "null", "-", "--", "?", "#n/a",
                "#na", "inconnu", "non renseigne", "vide", "nil", "undefined"}
 
 
+QUANTITE_HINTS = {"quantite", "quantity", "qte", "qty", "nombre", "nb",
+                  "units", "unites", "pieces", "volume", "cantidad", "menge"}
+
+
+def _hits_quantite(nom: str) -> bool:
+    """Reconnaît une colonne de quantité à son nom, si le mapping est muet."""
+    n = normalize_name(nom)
+    return bool(set(n.split("_")) & QUANTITE_HINTS)
+
+
 def _strip_accents(s: str) -> str:
     n = unicodedata.normalize("NFKD", str(s))
     return "".join(c for c in n if not unicodedata.combining(c))
@@ -360,15 +370,27 @@ def detect_dates(df: pd.DataFrame, profile: dict) -> list[Issue]:
 # M — Montants et quantités
 # ==========================================================================
 
-def detect_measures(df: pd.DataFrame, profile: dict) -> list[Issue]:
+def detect_measures(df: pd.DataFrame, profile: dict,
+                    mapping: dict | None = None) -> list[Issue]:
     out: list[Issue] = []
     n = len(df)
+
+    inverse = {v: k for k, v in (mapping or {}).items() if v}
 
     for c in profile["columns"]:
         if c["role_candidate"] != "measure":
             continue
         col, st = c["name"], c["stats"]
         s = pd.to_numeric(clean_numeric_strings(df[col]), errors="coerce")
+
+        # Une QUANTITÉ n'est pas un MONTANT. Parler de « montant à zéro » sur
+        # une colonne « Qty », ou de « cadeaux et échantillons » pour expliquer
+        # une quantité nulle, décrédibilise tout le diagnostic : l'utilisateur
+        # constate que le système ne comprend pas ce qu'il lit.
+        role_metier = inverse.get(col)
+        est_quantite = (role_metier == "quantity"
+                        or _hits_quantite(col))
+        mot = "quantité" if est_quantite else "montant"
 
         # M07 — séparateur décimal ambigu (détecté au profilage)
         if "M07_ambiguous_decimal" in c["flags"]:
@@ -400,9 +422,12 @@ def detect_measures(df: pd.DataFrame, profile: dict) -> list[Issue]:
             out.append(Issue(
                 id="M01_negative", severity=SEV_MED, policy=ASK,
                 columns=[col], affected_rows=neg, affected_share=neg / n,
-                user_message=f"{neg} ligne(s) ont un montant négatif dans « {col} ».",
-                user_explanation="Ce sont peut-être des remboursements. Si vous les gardez, "
-                                 "ils viendront en déduction de votre chiffre d'affaires.",
+                user_message=f"{neg} ligne(s) ont une {mot} négative dans « {col} ».",
+                user_explanation=("Ce sont probablement des retours de marchandise."
+                                  if est_quantite else
+                                  "Ce sont peut-être des remboursements. Si vous les "
+                                  "gardez, ils viendront en déduction de votre "
+                                  "chiffre d'affaires."),
                 recommendation="separate",
                 recommendation_label="Les analyser à part",
                 options=_opts(("separate", "Analyser à part"), ("keep", "Garder dans le total"),
@@ -412,14 +437,21 @@ def detect_measures(df: pd.DataFrame, profile: dict) -> list[Issue]:
         # M02 — valeurs nulles
         zero = int(st.get("n_zero", 0))
         if zero and zero / n >= 0.01:
+            if est_quantite:
+                explication = ("Une commande sans quantité correspond souvent à "
+                               "une commande annulée ou à une ligne de service. "
+                               "Gardées, elles faussent vos volumes vendus.")
+            else:
+                explication = ("Cadeaux, échantillons, ou commandes de test. "
+                               "Gardées, elles font baisser votre panier moyen.")
             out.append(Issue(
                 id="M02_zero_values", severity=SEV_LOW, policy=ASK,
                 columns=[col], affected_rows=zero, affected_share=zero / n,
-                user_message=f"{zero} ligne(s) ont un montant à zéro dans « {col} ».",
-                user_explanation="Cadeaux, échantillons, ou commandes de test. "
-                                 "Gardées, elles font baisser votre panier moyen.",
+                user_message=f"{zero} ligne(s) ont une {mot} à zéro "
+                             f"dans « {col} ».",
+                user_explanation=explication,
                 recommendation="exclude",
-                recommendation_label="Les exclure des moyennes",
+                recommendation_label="Les exclure des calculs",
                 options=_opts(("exclude", "Exclure"), ("keep", "Garder"),
                               ("preview", "Voir les lignes")),
             ))
@@ -439,12 +471,14 @@ def detect_measures(df: pd.DataFrame, profile: dict) -> list[Issue]:
                         id="M03_extreme_outliers", severity=SEV_HIGH, policy=ASK,
                         columns=[col], affected_rows=len(ext), affected_share=len(ext) / n,
                         sample_rows=[int(i) for i in ext.index[:10]],
-                        user_message=f"{len(ext)} montant(s) sont anormalement élevés "
-                                     f"dans « {col} ».",
+                        user_message=f"{len(ext)} {mot}(s) sont anormalement "
+                                     f"élevée(s) dans « {col} »." if est_quantite else
+                                     f"{len(ext)} montant(s) sont anormalement "
+                                     f"élevés dans « {col} ».",
                         user_explanation=f"La valeur la plus haute est {ext.max():,.0f}, "
-                                         f"alors que la commande habituelle est autour de "
-                                         f"{med:,.0f}. Cela ressemble à une erreur de saisie "
-                                         f"ou à une ligne de total.",
+                                         f"alors que l'habituel est autour de "
+                                         f"{med:,.0f}. Cela ressemble à une erreur de "
+                                         f"saisie ou à une ligne de total.",
                         impact_if_ignored="Vos moyennes seront fortement faussées.",
                         recommendation="preview",
                         recommendation_label="Vérifier ces lignes",
@@ -878,7 +912,7 @@ def diagnose(df: pd.DataFrame, profile: dict, read_report=None,
     issues += detect_structure(df, profile, read_report)
     issues += detect_duplicates(df, profile, mapping)
     issues += detect_dates(df, profile)
-    issues += detect_measures(df, profile)
+    issues += detect_measures(df, profile, mapping)
     issues += detect_categories(df, profile)
     issues += detect_missing(df, profile, mapping)
     issues += detect_special_rows(df, profile, mapping)
