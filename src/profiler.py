@@ -54,8 +54,46 @@ CURRENCY = re.compile(r"[€$£¥]|R\$|EUR|USD|XOF|FCFA|CFA", re.IGNORECASE)
 NUM_LIKE = re.compile(r"^-?\d{1,3}(?:[ \u00a0.,]\d{3})*(?:[.,]\d+)?$|^-?\d+(?:[.,]\d+)?$")
 
 DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y",
-                "%d.%m.%Y", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M",
-                "%Y-%m-%dT%H:%M:%S", "%d %B %Y", "%b %d, %Y"]
+                "%m-%d-%Y", "%d.%m.%Y", "%m.%d.%Y",
+                "%d/%m/%y", "%m/%d/%y", "%d-%m-%y", "%m-%d-%y",
+                "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M",
+                "%Y-%m-%dT%H:%M:%S", "%d %B %Y", "%b %d, %Y", "%B %d, %Y"]
+
+
+def detecter_ordre_jour_mois(vals: pd.Series) -> tuple[str, float]:
+    """
+    Déduit si le premier groupe d'une date est le JOUR ou le MOIS.
+
+    Imposer une convention est une erreur : « 04-30-22 » est américain
+    (30 avril), « 04/10/2023 » est français (4 octobre). Forcer `dayfirst=True`
+    corrigeait l'un en cassant l'autre.
+
+    Le contenu tranche sans ambiguïté dès qu'une valeur dépasse 12 : un mois
+    ne va jamais au-delà. On ne devine que lorsque les deux groupes restent
+    sous 12 sur TOUTE la colonne — cas réellement indécidable, signalé par T02.
+
+    Retourne (« dayfirst » | « monthfirst » | « indécidable », confiance).
+    """
+    t = vals.astype(str).str.strip()
+    parts = t.str.extract(r"^(\d{1,2})[/\-.](\d{1,2})[/\-.]")
+    a = pd.to_numeric(parts[0], errors="coerce")
+    b = pd.to_numeric(parts[1], errors="coerce")
+    valides = a.notna() & b.notna()
+    if valides.sum() < max(5, len(t) * 0.5):
+        return "indécidable", 0.0
+
+    a, b = a[valides], b[valides]
+    a_sup12 = int((a > 12).sum())
+    b_sup12 = int((b > 12).sum())
+
+    if a_sup12 and not b_sup12:
+        return "dayfirst", min(0.99, 0.7 + a_sup12 / len(a))
+    if b_sup12 and not a_sup12:
+        return "monthfirst", min(0.99, 0.7 + b_sup12 / len(b))
+    if a_sup12 and b_sup12:
+        # Les deux dépassent 12 : la colonne mélange deux conventions
+        return "indécidable", 0.0
+    return "indécidable", 0.0
 
 SAMPLE_CAP = 20000   # échantillon pour l'inférence de type (§7 passage à l'échelle)
 
@@ -186,8 +224,23 @@ def try_datetime(s: pd.Series) -> tuple[pd.Series | None, float, str | None]:
     # doit jamais planter sur une colonne de libellés ordinaire.
     vals = vals.map(lambda x: str(x))
 
+    # L'ORDRE des groupes est déduit du contenu, puis les formats sont
+    # essayés dans l'ordre compatible. Sans cela, « %d/%m/%Y » et « %m/%d/%Y »
+    # réussissent tous deux sur une colonne ambiguë, et le premier testé gagne
+    # — un choix arbitraire qui décale toute la série temporelle.
+    ordre, conf_ordre = detecter_ordre_jour_mois(vals)
+    formats = list(DATE_FORMATS)
+    if ordre == "dayfirst":
+        formats = [f for f in formats if "%m/%d" not in f and "%m-%d" not in f
+                   and "%m.%d" not in f] + \
+                  [f for f in formats if "%m/%d" in f or "%m-%d" in f or "%m.%d" in f]
+    elif ordre == "monthfirst":
+        formats = [f for f in formats if "%d/%m" not in f and "%d-%m" not in f
+                   and "%d.%m" not in f] + \
+                  [f for f in formats if "%d/%m" in f or "%d-%m" in f or "%d.%m" in f]
+
     best, best_ratio, best_fmt = None, 0.0, None
-    for fmt in DATE_FORMATS:
+    for fmt in formats:
         try:
             parsed = pd.to_datetime(vals, format=fmt, errors="coerce")
         except Exception:
@@ -200,7 +253,8 @@ def try_datetime(s: pd.Series) -> tuple[pd.Series | None, float, str | None]:
 
     if best_ratio < 0.90:  # dernier recours : parsing tolérant (T05)
         try:
-            parsed = pd.to_datetime(vals, errors="coerce", format="mixed", dayfirst=True)
+            parsed = pd.to_datetime(vals, errors="coerce", format="mixed",
+                                    dayfirst=(ordre != "monthfirst"))
             ratio = float(parsed.notna().mean())
             if ratio > best_ratio:
                 best, best_ratio, best_fmt = parsed, ratio, "mixte"

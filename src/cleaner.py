@@ -452,10 +452,17 @@ class Cleaner:
             self._log("T02_ambiguous_format", "parse_dates", cols=[date_col],
                       params={"format": fmt, "source": "profileur"})
         else:
+            # Ordre déduit du CONTENU : une colonne « 04-30-22 » est
+            # américaine, « 04/10/2023 » est française. Imposer une convention
+            # corrige l'une en cassant l'autre.
+            from .profiler import detecter_ordre_jour_mois
+            ordre, conf = detecter_ordre_jour_mois(df[date_col].dropna())
+            if conf >= 0.7:
+                dayfirst = (ordre == "dayfirst")
             df[date_col] = pd.to_datetime(df[date_col], errors="coerce",
                                           format="mixed", dayfirst=dayfirst)
             self._log("T02_ambiguous_format", "parse_dates", cols=[date_col],
-                      params={"dayfirst": dayfirst})
+                      params={"dayfirst": dayfirst, "ordre_deduit": ordre})
 
         # T04 — dates absurdes : passage à vide, jamais d'invention de valeur
         mask = (df[date_col].dt.year < 1990) | (df[date_col].dt.year == 1900)
@@ -585,7 +592,10 @@ def controle_vraisemblance(cleaner, mapping: dict | None = None) -> dict:
         elif fmt_date:
             d = pd.to_datetime(s, format=fmt_date, errors="coerce").dropna()
         else:
-            d = pd.to_datetime(s, errors="coerce", dayfirst=True).dropna()
+            from .profiler import detecter_ordre_jour_mois
+            ordre, conf = detecter_ordre_jour_mois(s.dropna())
+            d = pd.to_datetime(s, errors="coerce",
+                               dayfirst=(ordre != "monthfirst")).dropna()
         if len(d) < 2:
             return None
         return int((d.max() - d.min()).days)

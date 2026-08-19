@@ -88,6 +88,10 @@ def _temporal_key(s: pd.Series, grain: str, dayfirst: bool = True) -> pd.Series:
     if pd.api.types.is_datetime64_any_dtype(s):
         d = s
     else:
+        from .profiler import detecter_ordre_jour_mois
+        ordre, conf = detecter_ordre_jour_mois(s.dropna())
+        if conf >= 0.7:
+            dayfirst = (ordre == "dayfirst")
         d = pd.to_datetime(s, errors="coerce", format="mixed", dayfirst=dayfirst)
     if grain == "day":
         return d.dt.strftime("%Y-%m-%d")
