@@ -223,32 +223,53 @@ def compute_stats(res: dict) -> dict:
         # système annonçait « −85 % » — un chiffre faux qui affolerait le
         # commerçant. On détecte le cas et on calcule la tendance SANS cette
         # période, tout en la conservant dans le graphique.
-        v_calc, exclue = v, None
+        # Les périodes de BORD peuvent être partielles des DEUX côtés : un
+        # export du 4 février a un dernier mois tronqué, un export commencé
+        # le 31 mars a un PREMIER mois d'une seule journée. Ne contrôler que
+        # la dernière laissait passer « +22 461 % » sur un fichier où
+        # l'activité baissait en réalité de 18,5 %.
+        t = res["table"]
+        eff = (t["n_lignes"].astype(float)
+               if "n_lignes" in t.columns and t["n_lignes"].notna().all() else None)
+        debut, fin = 0, len(v)
+        exclues = []
+
         if len(v) >= 4:
-            reste = v.iloc[:-1]
-            t = res["table"]
+            centre = v.iloc[1:-1] if len(v) > 3 else v
+            med_val = float(centre.median())
+            med_eff = float(eff.iloc[1:-1].median()) if eff is not None else None
 
-            # Deux indices d'une période partielle :
-            #  - la VALEUR s'effondre (vrai pour une somme)
-            #  - l'EFFECTIF s'effondre (seul indice pour une moyenne)
-            partielle = v.iloc[-1] < reste.median() * 0.5
-            if "n_lignes" in t.columns and t["n_lignes"].notna().all():
-                eff = t["n_lignes"].astype(float)
-                if eff.iloc[-1] < eff.iloc[:-1].median() * 0.5:
-                    partielle = True
-                    st["last_period_n_lignes"] = int(eff.iloc[-1])
-                    st["periode_habituelle_n_lignes"] = int(eff.iloc[:-1].median())
+            def partielle(i):
+                if med_val and v.iloc[i] < med_val * 0.5:
+                    return True
+                if med_eff and eff is not None and eff.iloc[i] < med_eff * 0.5:
+                    return True
+                return False
 
-            if partielle:
-                v_calc = reste
-                exclue = str(t["dim0"].iloc[-1])
-                st["last_period_incomplete"] = True
-                st["last_period_excluded"] = exclue
-                st["last_period_value"] = round(float(v.iloc[-1]), 2)
+            if partielle(0):
+                debut = 1
+                exclues.append({"periode": str(t["dim0"].iloc[0]),
+                                "position": "début",
+                                "valeur": round(float(v.iloc[0]), 2),
+                                "n_lignes": int(eff.iloc[0]) if eff is not None else None})
+            if partielle(len(v) - 1):
+                fin = len(v) - 1
+                exclues.append({"periode": str(t["dim0"].iloc[-1]),
+                                "position": "fin",
+                                "valeur": round(float(v.iloc[-1]), 2),
+                                "n_lignes": int(eff.iloc[-1]) if eff is not None else None})
+
+        v_calc = v.iloc[debut:fin] if fin - debut >= 2 else v
+        if exclues:
+            st["periodes_incompletes"] = exclues
+            st["last_period_incomplete"] = True      # compatibilité
+            st["last_period_excluded"] = ", ".join(e["periode"] for e in exclues)
+            st["last_period_value"] = exclues[-1]["valeur"]
 
         st["first_value"] = round(float(v_calc.iloc[0]), 2)
         st["last_value"] = round(float(v_calc.iloc[-1]), 2)
-        st["last_period"] = str(res["table"]["dim0"].iloc[len(v_calc) - 1])
+        st["first_period"] = str(t["dim0"].iloc[debut])
+        st["last_period"] = str(t["dim0"].iloc[debut + len(v_calc) - 1])
         st["change_absolute"] = round(float(v_calc.iloc[-1] - v_calc.iloc[0]), 2)
         if v_calc.iloc[0]:
             st["change_pct"] = round(float((v_calc.iloc[-1] / v_calc.iloc[0] - 1) * 100), 1)
@@ -278,12 +299,28 @@ def compute_stats(res: dict) -> dict:
             st["volatilite_pct"] = round(volatilite, 1)
 
             pente_relative = abs(pente) / abs(moy) * 100
-            if r2 < 0.25 or pente_relative < 1.0:
+            variation = st.get("change_pct", 0.0)
+
+            # La pente et la variation début→fin doivent CONCORDER. Sur une
+            # série saisonnière, une pente positive peut coexister avec des
+            # points de bord en baisse : annoncer « une hausse de −22,4 % »
+            # n'a aucun sens pour un lecteur. En cas de divergence, on ne
+            # tranche pas.
+            concordent = (pente > 0) == (variation > 0) if variation else True
+
+            if r2 < 0.25 or pente_relative < 1.0 or not concordent:
                 st["trend_direction"] = "stable"
-                st["trend_comment"] = (
-                    f"Aucune tendance nette : les variations d'une période à "
-                    f"l'autre ({volatilite:.1f} %) sont du même ordre que "
-                    f"l'écart entre le début et la fin.")
+                if not concordent:
+                    st["trend_comment"] = (
+                        f"Pas de direction claire : le niveau global progresse, "
+                        f"mais le début et la fin de la période ne le reflètent "
+                        f"pas. Les variations d'une période à l'autre atteignent "
+                        f"{volatilite:.1f} %.")
+                else:
+                    st["trend_comment"] = (
+                        f"Aucune tendance nette : les variations d'une période à "
+                        f"l'autre ({volatilite:.1f} %) sont du même ordre que "
+                        f"l'écart entre le début et la fin.")
             elif pente > 0:
                 st["trend_direction"] = "hausse"
             else:
