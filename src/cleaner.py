@@ -29,7 +29,7 @@ import pandas as pd
 
 from .profiler import clean_numeric_strings
 from .quality import (ASK, AUTO, AUTO_NOTIFIED, BLOCK, CANCELLED, NULL_TOKENS,
-                      TOTAL_TOKENS, _strip_accents)
+                      TOTAL_TOKENS, _strip_accents, masque_annulees)
 
 
 # --------------------------------------------------------------------------
@@ -236,8 +236,9 @@ class Cleaner:
             issue = self.issues["X02_cancelled_orders"]
             col = issue["columns"][0] if issue["columns"] else None
             if col and col in df.columns:
-                s = df[col].astype(str).str.strip().str.lower().map(_strip_accents)
-                mask = s.isin({_strip_accents(x) for x in CANCELLED})
+                # MÊME règle que la détection : sans cela, le diagnostic et la
+                # correction portent sur des ensembles différents.
+                mask = masque_annulees(df[col])
                 if mask.any():
                     removed = df.index[mask].tolist()
                     # "separate" conserve les lignes dans un attribut dédié :
