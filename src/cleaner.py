@@ -127,9 +127,16 @@ class Cleaner:
         return self
 
     def set_decision(self, issue_id: str, action: str) -> "Cleaner":
-        """Enregistre l'arbitrage de l'utilisateur pour une anomalie."""
+        """
+        Enregistre l'arbitrage de l'utilisateur pour une anomalie.
+
+        Une décision portant sur une anomalie absente est IGNORÉE, jamais
+        fatale : elle provient presque toujours d'un fichier analysé
+        précédemment dans la même session. Faire tomber toute l'application
+        pour une décision devenue sans objet serait disproportionné.
+        """
         if issue_id not in self.issues:
-            raise KeyError(f"Anomalie inconnue : {issue_id}")
+            return self
         self.decisions[issue_id] = action
         self._cache = None
         return self

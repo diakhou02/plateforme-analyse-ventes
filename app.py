@@ -73,6 +73,7 @@ def init():
         "map_res": None, "mapping": None, "rapport": None, "cleaner": None,
         "df_clean": None, "facts": None, "interpretations": None,
         "synthese": None, "decisions": {}, "secteur": None,
+        "fichier_courant": None,
     }.items():
         st.session_state.setdefault(cle, val)
 
@@ -135,6 +136,18 @@ if st.session_state.etape == 1:
                    "reconnus automatiquement, en français comme en anglais.")
 
     if fichier is not None:
+        # Un nouveau fichier remet TOUT à zéro. Sans cela, les décisions, le
+        # secteur et les analyses du fichier précédent survivent dans la
+        # session et s'appliquent à des données auxquelles ils ne
+        # correspondent plus.
+        signature = f"{fichier.name}:{fichier.size}"
+        if st.session_state.get("fichier_courant") != signature:
+            for cle in ("decisions", "secteur", "facts", "interpretations",
+                        "synthese", "cleaner", "df_clean", "mapping",
+                        "map_res", "rapport", "profil"):
+                st.session_state[cle] = {} if cle == "decisions" else None
+            st.session_state["fichier_courant"] = signature
+
         try:
             with st.spinner("Lecture du fichier…"):
                 df, rap_lecture = read_any(fichier.getvalue(), filename=fichier.name)
@@ -257,8 +270,9 @@ elif st.session_state.etape == 2:
             nettoyeur = Cleaner(st.session_state.df_raw, rapport,
                                 st.session_state.mapping)
             nettoyeur.apply_defaults()
+            connues = {i["id"] for i in rapport.get("issues", [])}
             for iid, action in st.session_state.decisions.items():
-                if action != "preview":
+                if action != "preview" and iid in connues:
                     nettoyeur.set_decision(iid, action)
             st.session_state.cleaner = nettoyeur
             st.session_state.df_clean = nettoyeur.result()
