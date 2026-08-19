@@ -66,6 +66,24 @@ def _strip_accents(s: str) -> str:
     return "".join(c for c in n if not unicodedata.combining(c))
 
 
+def masque_annulees(serie) -> "pd.Series":
+    """
+    Repère les statuts sans revenu, y compris composés.
+
+    Cette fonction est utilisée à la fois par la DÉTECTION (quality) et par la
+    CORRECTION (cleaner). Les avoir écrites séparément faisait diverger les
+    deux : le diagnostic annonçait 20 446 commandes annulées, le nettoyage n'en
+    retirait que 18 332 — celles dont le libellé correspondait exactement.
+    """
+    s = serie.astype(str).str.strip().str.lower().map(_strip_accents)
+    motifs = {_strip_accents(x) for x in CANCELLED}
+    mask = s.isin(motifs)
+    for m in motifs:
+        if len(m) >= 6:
+            mask |= s.str.contains(rf"\b{m}", regex=True, na=False)
+    return mask
+
+
 def _levenshtein(a: str, b: str, cap: int = 3) -> int:
     """Distance d'édition, abandonnée au-delà de `cap` (suffisant pour C04)."""
     if abs(len(a) - len(b)) > cap:
@@ -750,16 +768,7 @@ def detect_special_rows(df: pd.DataFrame, profile: dict, mapping: dict | None) -
                     status_col = c["name"]
                     break
     if status_col and status_col in df.columns:
-        s = df[status_col].astype(str).str.strip().str.lower().map(_strip_accents)
-        # Correspondance par SOUS-CHAÎNE : « Shipped - Returned to Seller » ou
-        # « Shipped - Rejected by Buyer » sont des non-ventes, mais une égalité
-        # stricte ne les repérait pas. Sur un export Amazon réel, cela faisait
-        # passer 14,2 % de commandes annulées pour 4,6 %.
-        motifs = {_strip_accents(x) for x in CANCELLED}
-        mask = s.isin(motifs)
-        for m in motifs:
-            if len(m) >= 6:
-                mask |= s.str.contains(rf"\b{m}", regex=True, na=False)
+        mask = masque_annulees(df[status_col])
         if mask.any():
             k = int(mask.sum())
             out.append(Issue(
