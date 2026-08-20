@@ -41,10 +41,22 @@ from .planner import call_llm, parse_json_response
 SECTEURS = {
     "mode": {
         "label": "Mode et habillement",
+        # Le lexique doit couvrir les CATALOGUES RÉELS, pas seulement le
+        # vocabulaire générique. Sur un vendeur indien de textile, seul
+        # « dress » répondait : la confiance tombait à 0,6 et basculait sous
+        # le seuil au moindre changement d'échantillon. Un lexique trop
+        # étroit rend la détection instable, pas seulement incomplète.
         "mots": ["robe", "chemise", "pantalon", "veste", "jean", "pull", "tshirt",
                  "t-shirt", "chaussure", "basket", "sandale", "manteau", "jupe",
-                 "vetement", "mode", "dress", "shirt", "shoes", "apparel",
-                 "clothing", "fashion", "moda", "roupa", "calcado"],
+                 "vetement", "mode", "pret a porter", "lingerie", "maillot",
+                 "short", "blouson", "sweat", "polo", "costume", "tailleur",
+                 "dress", "shirt", "shoes", "apparel", "clothing", "fashion",
+                 "top", "bottom", "blouse", "skirt", "trouser", "jacket",
+                 "coat", "sweater", "hoodie", "denim", "wear", "outfit",
+                 "kurta", "kurti", "saree", "sari", "dupatta", "lehenga",
+                 "salwar", "ethnic wear", "western wear", "tunic", "abaya",
+                 "moda", "roupa", "calcado", "vestido", "camisa",
+                 "kleidung", "abbigliamento"],
         "saisonnalite": "Deux pics annuels aux changements de saison (mars-avril "
                         "et septembre-octobre), plus les soldes.",
         "enjeux": ["taux de retour élevé (tailles)", "rotation rapide des collections",
@@ -86,8 +98,12 @@ SECTEURS = {
         "label": "Maison et ameublement",
         "mots": ["meuble", "table", "chaise", "canape", "lit", "matelas", "linge",
                  "rideau", "cuisine", "ustensile", "casserole", "maison",
-                 "furniture", "kitchen", "bedding", "home", "cama", "mesa",
-                 "banho", "moveis"],
+                 "armoire", "commode", "etagere", "coussin", "couette", "drap",
+                 "vaisselle", "poele", "electromenager", "rangement",
+                 "furniture", "kitchen", "bedding", "home", "sofa", "couch",
+                 "bed", "lamp", "cookware", "dining", "wardrobe", "mattress",
+                 "cushion", "curtain", "tableware", "appliance", "shelf",
+                 "cama", "mesa", "banho", "moveis", "cocina", "mobili"],
         "saisonnalite": "Pics au printemps et à la rentrée, "
                         "liés aux déménagements.",
         "enjeux": ["panier élevé mais achat peu fréquent",
@@ -114,7 +130,10 @@ SECTEURS = {
         "label": "Sport et loisirs",
         "mots": ["sport", "fitness", "velo", "course", "running", "yoga",
                  "musculation", "randonnee", "camping", "ballon", "raquette",
-                 "bike", "gym", "outdoor", "esporte", "lazer"],
+                 "natation", "ski", "escalade", "peche", "haltere", "tapis",
+                 "bike", "gym", "outdoor", "football", "tennis", "basketball",
+                 "racket", "racquet", "soccer", "cricket", "golf", "workout",
+                 "athletic", "sneaker", "esporte", "lazer", "deporte"],
         "saisonnalite": "Pic en janvier (bonnes résolutions) et au printemps. "
                         "Creux estival sur le fitness intérieur.",
         "enjeux": ["forte saisonnalité par discipline",
@@ -125,9 +144,12 @@ SECTEURS = {
     },
     "alimentaire": {
         "label": "Alimentation et boissons",
-        "mots": ["cafe", "the", "chocolat", "vin", "biere", "epicerie", "bio",
-                 "snack", "boisson", "aliment", "food", "coffee", "tea", "wine",
-                 "grocery", "organic", "alimentos", "bebidas"],
+        "mots": ["cafe", "chocolat", "vin", "biere", "epicerie", "produits bio",
+                 "snack", "boisson", "aliment", "confiserie", "conserve",
+                 "fromage", "pates", "farine", "huile", "the vert", "the noir",
+                 "food", "coffee", "wine", "beer", "grocery", "organic",
+                 "beverage", "snacks", "dairy", "bakery", "spices", "cereal",
+                 "alimentos", "bebidas", "lebensmittel"],
         "saisonnalite": "Ventes régulières, pics aux fêtes de fin d'année.",
         "enjeux": ["réachat fréquent", "dates limites de consommation",
                    "logistique du frais", "panier moyen faible"],
@@ -173,8 +195,11 @@ SECTEURS = {
     "papeterie_livres": {
         "label": "Papeterie, livres et culture",
         "mots": ["livre", "cahier", "stylo", "papeterie", "agenda", "carte",
-                 "bureau", "book", "stationery", "pen", "notebook", "office",
-                 "livros", "papelaria"],
+                 "bureau", "roman", "bande dessinee", "manuel", "dictionnaire",
+                 "classeur", "feutre", "crayon", "book", "books", "stationery",
+                 "pen", "notebook", "office", "fiction", "textbook",
+                 "biography", "novel", "comic", "magazine", "journal",
+                 "paperback", "hardcover", "literature", "livros", "papelaria"],
         "saisonnalite": "Pic à la rentrée de septembre et à Noël.",
         "enjeux": ["panier faible", "forte concurrence",
                    "produits peu différenciés"],
