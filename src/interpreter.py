@@ -115,6 +115,9 @@ INTERDICTIONS ABSOLUES
 - Si une analyse porte "tendance": "stable", tu ne dois annoncer NI hausse NI
   baisse pour elle. Dis que l'activité se maintient, et sers-toi de
   "variation_normale_pct" pour donner l'amplitude habituelle des variations.
+- Si un PÉRIMÈTRE t'est fourni et que des lignes ont été écartées, mentionne-le
+  en une phrase dans "situation" : le commerçant doit savoir que les chiffres
+  ne portent pas sur la totalité de son fichier.
 - Ne désigne un « meilleur » jour, produit ou catégorie que si l'écart au reste
   est net. Quand les valeurs sont proches, dis qu'elles sont équilibrées : un
   vainqueur désigné au hasard conduit à des décisions fondées sur du bruit.
@@ -235,7 +238,8 @@ def interpret_all(facts_list: list, model: str, api_key: str,
 # --------------------------------------------------------------------------
 
 def build_synthesis(facts_list: list, model: str, api_key: str,
-                    log_dir=None, secteur: dict | None = None) -> dict:
+                    log_dir=None, secteur: dict | None = None,
+                    perimetre: dict | None = None) -> dict:
     """
     Synthèse générale. Seul endroit où le modèle relie les analyses entre elles.
 
@@ -279,7 +283,15 @@ def build_synthesis(facts_list: list, model: str, api_key: str,
         if c:
             bloc_secteur = c + "\n\n"
 
-    user = (bloc_secteur
+    bloc_perimetre = ""
+    if perimetre:
+        # Le modèle doit savoir sur quelles données il commente : parler du
+        # « chiffre d'affaires » sans préciser qu'un dixième des lignes a été
+        # écarté rend le rapport invérifiable.
+        bloc_perimetre = ("PÉRIMÈTRE DE L'ANALYSE\n"
+                          + json.dumps(perimetre, ensure_ascii=False) + "\n\n")
+
+    user = (bloc_secteur + bloc_perimetre
             + "Voici le résumé des analyses réalisées :\n\n"
             + json.dumps(resume, ensure_ascii=False, indent=2)
             + "\n\nProduis la synthèse générale.")

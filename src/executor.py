@@ -598,3 +598,111 @@ def run_plan(specs: list, df: pd.DataFrame, mapping: dict,
             echecs.append({"spec": spec.get("title"),
                            "reason": f"{type(e).__name__} : {e}"})
     return facts, echecs
+
+
+# --------------------------------------------------------------------------
+# Périmètre de l'analyse
+# --------------------------------------------------------------------------
+
+def build_perimetre(df_raw, df_clean, mapping: dict,
+                    cleaning_log: dict | None = None,
+                    facts: list | None = None) -> dict:
+    """
+    Décrit SUR QUOI porte l'analyse : lignes retenues, période, montant.
+
+    Un rapport qui affiche « 62 913 649 » sans dire s'il s'agit du chiffre
+    d'affaires complet ou d'un sous-ensemble après correction est
+    invérifiable — y compris par celui qui l'a produit. L'information existait
+    déjà dans le champ `coverage` de chaque analyse, mais n'était affichée
+    nulle part.
+    """
+    import pandas as pd
+
+    from .profiler import clean_numeric_strings
+
+    def num(df, col):
+        if not col or col not in df.columns:
+            return None
+        s = df[col]
+        if pd.api.types.is_numeric_dtype(s):
+            return s
+        return pd.to_numeric(clean_numeric_strings(s), errors="coerce")
+
+    rev = mapping.get("revenue")
+    brut = num(df_raw, rev)
+    net = num(df_clean, rev)
+
+    date_col = mapping.get("order_date")
+    periode = None
+    if date_col and date_col in df_clean.columns:
+        d = pd.to_datetime(df_clean[date_col], errors="coerce").dropna()
+        if len(d):
+            periode = {"debut": str(d.min().date()), "fin": str(d.max().date()),
+                       "jours": int((d.max() - d.min()).days)}
+
+    # Périodes de bord écartées des calculs de tendance
+    exclues = []
+    for f in (facts or []):
+        for e in (f.get("computed_stats", {}).get("periodes_incompletes") or []):
+            if e["periode"] not in [x["periode"] for x in exclues]:
+                exclues.append(e)
+
+    retirees = []
+    for o in ((cleaning_log or {}).get("operations") or []):
+        if o.get("rows_affected") and o["action"] in (
+                "remove_rows", "remove_duplicates", "separate_rows"):
+            retirees.append({"motif": o["issue_id"], "lignes": o["rows_affected"]})
+
+    p = {
+        "lignes_recues": int(len(df_raw)),
+        "lignes_analysees": int(len(df_clean)),
+        "lignes_ecartees": int(len(df_raw) - len(df_clean)),
+        "part_analysee_pct": round(len(df_clean) / len(df_raw) * 100, 1) if len(df_raw) else 0.0,
+        "periode": periode,
+        "periodes_hors_tendance": exclues,
+        "detail_ecarts": sorted(retirees, key=lambda x: -x["lignes"])[:6],
+    }
+
+    if brut is not None and net is not None:
+        p["montant_recu"] = round(float(brut.sum()), 2)
+        p["montant_analyse"] = round(float(net.sum()), 2)
+        p["montant_ecarte"] = round(float(brut.sum() - net.sum()), 2)
+        if brut.sum():
+            p["part_montant_pct"] = round(float(net.sum() / brut.sum() * 100), 1)
+        vides = int(net.isna().sum())
+        if vides:
+            p["lignes_sans_montant"] = vides
+
+    return p
+
+
+def phrase_perimetre(p: dict, unite: str = "") -> str:
+    """Une phrase en clair, à placer en tête du rapport."""
+    parts = [f"Analyse portant sur {p['lignes_analysees']:,} commandes"
+             .replace(",", " ")]
+    if p["lignes_ecartees"]:
+        parts.append(f"sur les {p['lignes_recues']:,} de votre fichier "
+                     f"({p['lignes_ecartees']:,} écartées)".replace(",", " "))
+    if p.get("periode"):
+        parts.append(f"du {p['periode']['debut']} au {p['periode']['fin']}")
+    texte = ", ".join(parts) + "."
+
+    if p.get("montant_ecarte") and p.get("part_montant_pct") is not None:
+        pct = p["part_montant_pct"]
+        base = f" Chiffre d'affaires retenu : {p['montant_analyse']:,.0f} {unite}"
+        if pct > 100.5:
+            # Retirer des montants NÉGATIFS (retours, avoirs) fait AUGMENTER
+            # la somme. Annoncer « 109 % du total reçu » serait incompréhensible :
+            # mieux vaut nommer la cause.
+            base += (f", après retrait de {abs(p['montant_ecarte']):,.0f} {unite} "
+                     f"de retours et avoirs.")
+        else:
+            base += f" ({pct} % du total reçu)."
+        texte += base.replace(",", " ")
+    elif p.get("montant_analyse") is not None:
+        texte += f" Chiffre d'affaires : {p['montant_analyse']:,.0f} {unite}.".replace(",", " ")
+
+    if p.get("lignes_sans_montant"):
+        texte += (f" {p['lignes_sans_montant']:,} lignes n'ont pas de montant "
+                  f"et ne comptent pas dans les totaux.").replace(",", " ")
+    return texte

@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.charts import build_figure
 from src.cleaner import Cleaner, controle_vraisemblance
-from src.executor import run_plan
+from src.executor import build_perimetre, phrase_perimetre, run_plan
 from src.interpreter import build_synthesis, interpret_one
 from src.mapper import (CONCEPTS, appliquer_derivations, build_mapping,
                         derivations_possibles, mapping_questions,
@@ -73,7 +73,7 @@ def init():
         "map_res": None, "mapping": None, "rapport": None, "cleaner": None,
         "df_clean": None, "facts": None, "interpretations": None,
         "synthese": None, "decisions": {}, "secteur": None,
-        "fichier_courant": None,
+        "fichier_courant": None, "perimetre": None,
     }.items():
         st.session_state.setdefault(cle, val)
 
@@ -456,6 +456,12 @@ elif st.session_state.etape == 4:
             facts, _ = run_plan(res["specs"], df_clean, mapping, unite="")
             st.session_state.facts = facts
 
+            # Périmètre : sur quelles données porte réellement le rapport
+            journal = (st.session_state.cleaner.cleaning_log()
+                       if st.session_state.cleaner else None)
+            st.session_state.perimetre = build_perimetre(
+                st.session_state.df_raw, df_clean, mapping, journal, facts)
+
             interpretations = {}
             if api_key:
                 for f in facts:
@@ -464,7 +470,8 @@ elif st.session_state.etape == 4:
                         secteur=st.session_state.secteur)
                 st.session_state.synthese = build_synthesis(
                     facts, model=MODELE_DEFAUT, api_key=api_key,
-                    secteur=st.session_state.secteur)
+                    secteur=st.session_state.secteur,
+                    perimetre=st.session_state.perimetre)
             st.session_state.interpretations = interpretations
 
     facts = st.session_state.facts
@@ -475,6 +482,34 @@ elif st.session_state.etape == 4:
     sect = st.session_state.secteur
     if sect and sect.get("label"):
         st.caption(f"Analyse adaptée à votre activité : **{sect['label']}**")
+
+    per = st.session_state.perimetre
+    if per:
+        st.markdown(
+            f"<div class='carte' style='border-left-color:#94a3b8;"
+            f"background:#f1f5f9;font-size:.92rem'>"
+            f"<div class='etiquette'>Sur quoi porte cette analyse</div>"
+            f"{phrase_perimetre(per)}</div>", unsafe_allow_html=True)
+        if per.get("detail_ecarts"):
+            with st.expander("Détail des lignes écartées"):
+                libelles = {
+                    "X02_cancelled_orders": "commandes annulées ou retournées",
+                    "N01_critical_missing": "lignes sans information indispensable",
+                    "M02_zero_values": "lignes à zéro",
+                    "D01_exact_duplicates": "doublons",
+                    "S07_total_rows": "lignes de total",
+                    "X01_test_rows": "commandes de test",
+                    "M01_negative": "montants négatifs",
+                    "M03_extreme_outliers": "montants aberrants",
+                    "T03_future_dates": "dates futures",
+                }
+                for e in per["detail_ecarts"]:
+                    st.markdown(f"- **{e['lignes']:,}** ".replace(",", " ")
+                                + libelles.get(e["motif"], e["motif"]))
+                if per.get("periodes_hors_tendance"):
+                    p_list = ", ".join(x["periode"] for x in per["periodes_hors_tendance"])
+                    st.caption(f"Périodes incomplètes exclues du calcul de "
+                               f"tendance : {p_list}")
 
     if synthese and not synthese.get("error"):
         st.markdown("### En résumé")
@@ -538,6 +573,7 @@ elif st.session_state.etape == 4:
                            "ventes_nettoyees.csv", "text/csv")
     with c3:
         rapport_export = {
+            "perimetre": st.session_state.perimetre,
             "synthese": synthese,
             "analyses": [{"titre": f["title"],
                           "chiffres": f["computed_stats"],
